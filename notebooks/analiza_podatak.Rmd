@@ -211,7 +211,7 @@ top_scorers_average_age_exp <- nba_data %>%
 print(top_scorers_average_age_exp)
 ```
 
-### Ovjde je podatkovni okvir bez iskustva, za prvih nekoliko godina nema smisla jer se nisu skupljali raniji podaci,ups
+### Ovdje je podatkovni okvir bez iskustva, za prvih nekoliko godina nema smisla jer se nisu skupljali raniji podaci,ups
 
 ```{r}
 top_scorers_average_age <- nba_data %>%
@@ -378,7 +378,7 @@ predictions <- predict(model, newdata = testing_set)
 
 # da vidimo da model nije pijan
 actual_vs_predicted <- data.frame(Actual = testing_set$pts, Predicted = predictions)
-print(actual_vs_predicted)
+#print(actual_vs_predicted[0:5][:])
 
 MSE <- mean((predictions - testing_set$pts)^2)
 print(MSE)
