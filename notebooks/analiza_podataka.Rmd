@@ -1,0 +1,671 @@
+---
+title: "Analiza podataka o NBA košarkašima"
+author: "Marko Haralović, Jan Murić, Dominik Agejev, Ante Perković"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(stringr)
+library(hflights)
+library(tidyr)
+library(lubridate)
+library(gridExtra)
+library(corrplot)
+library(caTools)
+knitr::opts_chunk$set(results = 'hold')
+
+```
+
+### Učitavanje skupa podataka u radnu okolinu
+
+```{r}
+nba_data <- read_csv("../dataset/all_seasons.csv", show_col_types = FALSE)
+head(nba_data)
+```
+### Zadaci
+
+Skup sadrži podatke igrača NBA (National Basketball Association) od sezone 1996./1997. do sezone 2022./2023. Neke od varijabli sadrže dob igrača, visinu, težinu, broj zabijenih koševa po sezoni, broj asistencija po sezoni itd.
+
+**Istraživačka pitanja:**
+
+- Razlikuje li se broj poena igrača po sezoni kroz različita desetljeća?
+- Postoji li značajna statistička razlika u visini igrača koji igraju za ekipe zapadne od igrača koji igraju za ekipe istočne konferencije?
+- Možemo li predvidjeti prosječni broj poena igrača u sezoni s obzirom na njegove biometrijske podatke?
+- Kakva je veza između dobi igrača i prosječnog broja postignutih poena po sezoni?
+
+NBA se sastoji od 30 timova koji su podijeljeni u dvije konferencije (Istočna i Zapadna). Svaka konferencija se sastoji od 3 divizije, što ukupno čini skup od 6 divizija. Imena divizija su: Atlantska, Centralna, Jugoistočna, Sjevernozapadna, Pacifička, Jugozapadna.
+
+Primjetiti ćemo kako u skupu podataka postoji više od 30 jedinstvenih imena timova; naime, neke su franšize, odnosno timovi, mijenjali lokacije (grad/državu) ili naziv tima, što je rezultiralo većim brojem jedinstvenih imena timova.
+
+### Osnovni pregled skupa podataka
+
+```{r}
+glimpse(nba_data)
+```
+
+### Razlikuje li se broj poena igrača po sezoni kroz različita desetljeća?
+
+**Kako modelirati zadatak:**
+   - Podjela skupa podataka po desetljećima: Prvi korak u modeliranju je podijeliti skup podataka na manje dijelove, pri čemu se                                                   fokusiramo na određena desetljeća.
+
+   - Sumiranje i prosječivanje broja poena po igraču za svako desetljeće:
+      - Jedna od načina za pristup ovom zadatku je sumiranje i uprosječivanje broja poena po igraču. Ova metoda uključuje uzimanje            prosjeka poena po igraču za svaku utakmicu po sezoni.
+      Metodologija:
+        - Umjesto da uklanjamo igrače s malim brojem utakmica, zadržavamo ih u analizi. Budući da sezona ima 82 utakmice, potrebno je           odrediti neki prag koji će se smatrati prihvatljivim za analizu.
+        - Za svaku sezonu unutar desetljeća, za svakog igrača, množimo broj postignutih poena po utakmici s brojem odigranih utakmica.
+        - Zatim sumiramo sve postignute poene svih igrača u toj sezoni i postupak ponavljamo za svaku sezonu unutar desetljeća.
+        - Na kraju, ukupan broj poena dijelimo s ukupnim brojem utakmica i brojem igrača kako bismo dobili prosječan broj poena po              utakmici za to desetljeće.
+
+**Razmatranje uključivanja igrača s malim brojem utakmica:**
+Postavlja se pitanje ima li smisla u statističkoj analizi uključiti igrače koji su odigrali samo mali broj utakmica, s obzirom na to da bi mogli biti potencijalni outlieri. No kako ovdje govorimo o desetljeću te velikom broju utakmica i igrača, smatramo kako nema potrebe za isključivanjem outliera, kako se fiksnim granicama koje bismo postavili postavlja i pitanje greške s naše strane upravo u tom postavljanju granice.
+
+
+      
+```{r}
+# u novi podatkovni okvir spremamo podatke iz origalnog okvira + stupac desetljeće
+nba_data_decade <- nba_data<- nba_data %>%
+  mutate(Decade = cut(as.numeric(substr(season, 1, 4)), 
+                      breaks = seq(1990, 2030, by = 10),
+                      labels = c("1990s", "2000s", "2010s", "2020s"),
+                      right = FALSE))
+head(nba_data_decade)
+```
+### Računanje prosječnog broja poena po utakmici na svim podacima
+
+- koristan podatak kako bismo bolje razumjeli značajnosti promejna broja poena po utakmica za svako desetljeće.
+- izračunati ćemo i varijancu, standardnu devijaciju , međukvartalni raspon IQR te medijan podataka, kako bismo dobili bolji osječaj o raspršenosti podataka.
+
+```{r}
+
+# Izračun ukupnog prosjeka poena po igri
+ukupno_bodova <- sum(nba_data$pts * nba_data$gp, na.rm = TRUE)
+ukupno_utakmica <- sum(nba_data$gp, na.rm = TRUE)
+overall_average_points_per_game <- ukupno_bodova / ukupno_utakmica
+
+# Ispis prosjeka poena po igri
+print(paste("Prosjek poena po igri iznosi:", overall_average_points_per_game))
+
+# Izračunavanje varijance poena po igri
+bodovi_po_igri_po_igracu <- nba_data$pts * nba_data$gp / nba_data$gp
+varijanca_bodova_po_igri <- var(bodovi_po_igri_po_igracu, na.rm = TRUE)
+
+# Ispis varijance poena po igri
+print(paste("Vrijednost varijance poena po igri iznosi:", varijanca_bodova_po_igri))
+
+# Standardna devijacija poena po igri
+std_dev_bodova_po_igri <- sd(nba_data$pts, na.rm = TRUE)
+print(paste("Standardna devijacija poena po igri iznosi:", std_dev_bodova_po_igri))
+
+# Izračun međukvartilnog raspona (IQR) za poene po igri
+IQR_bodova_po_igri <- IQR(nba_data$pts, na.rm = TRUE)
+print(paste("Međukvartilni raspon (IQR) poena po igri iznosi:", IQR_bodova_po_igri))
+
+# Izračun mediane apsolutne devijacije (MAD) za poene po igri
+MAD_bodova_po_igri <- mad(nba_data$pts, na.rm = TRUE)
+print(paste("Medijana apsolutne devijacije (MAD) poena po igri iznosi:",
+            MAD_bodova_po_igri))
+
+
+
+```
+
+```{r}
+#kreiranje globalnih varijabli preko kojih ćemo računati tražene podatke za zadatak
+total_points_decade <- numeric(length(unique(nba_data_decade$Decade)))
+print(total_points_decade)
+
+names(total_points_decade) <- unique(nba_data_decade$Decade)
+print(names(total_points_decade))
+
+total_games_decade <- numeric(length(unique(nba_data_decade$Decade)))
+print(total_games_decade)
+
+names(total_games_decade) <- unique(nba_data_decade$Decade)
+print(names(total_games_decade))
+```
+### sumiranje i uprosječivanje poena po igraču za svaku sezonu za desetljeće
+
+```{r}
+# stupac pts nosi informacije o poenima po utakmici, zaokružene na dvije decimale: 
+# što dovodi do problema s preciznošću, tako da ukupan broj poena zaokružujem 
+# na najveću donju granicu
+
+nba_data_decade <- nba_data_decade %>%
+  group_by(player_name, season) %>%
+  mutate(TotalPointsSeason = floor(gp * pts)) %>%
+  ungroup()
+
+print(head(nba_data_decade$TotalPointsSeason))
+
+```
+### Za svakog igrača odredimo ukupan broj poena i ukupan broj utakmica u desetljeću
+
+```{r}
+points_by_decade_player <- nba_data_decade %>%
+  group_by(Decade, player_name) %>%
+  summarize(TotalPoints = sum(TotalPointsSeason, na.rm = TRUE),
+            TotalGames = sum(gp, na.rm = TRUE), .groups = 'drop')
+
+print(head(points_by_decade_player))
+```
+
+### Izračun ukupnog broja poena po desetljeću
+- vektorski zapis s n elemenata, gdje je svaki element vektora suma poena igrača u određenom desetljeću
+
+### Izračun ukupnog broja utakmica po desetljeću
+- vektorski zapis s n elemenata, gdje je svaki element vektora suma poena igrača u određenom desetljeću
+
+n = 4 (podaci od 1990ih do 2020ih)
+
+```{r}
+total_points_decade <- sapply(levels(points_by_decade_player$Decade), function(decade) {
+  sum(points_by_decade_player$TotalPoints[points_by_decade_player$Decade == decade],
+      na.rm = TRUE)
+})
+
+print(total_points_decade)
+
+total_games_decade <- sapply(levels(points_by_decade_player$Decade), function(decade) {
+  sum(points_by_decade_player$TotalGames[points_by_decade_player$Decade == decade],
+      na.rm = TRUE)
+})
+
+print(total_games_decade)
+
+```
+### Izračun prosječnoj broja poena igrača po utakmici za svako desetljeće
+
+```{r}
+#prosječni broj poena po utakmici
+average_points_per_game_decade <- total_points_decade / total_games_decade
+print(average_points_per_game_decade)
+```
+```{r}
+decade_summary <- data.frame(
+  Decade = names(total_points_decade),
+  TotalPoints = total_points_decade,
+  TotalGames = total_games_decade
+) %>%
+  mutate(AveragePointsPerGame = TotalPoints / TotalGames)
+
+print(decade_summary)
+```
+
+## Pitanja:
+### Postoji li značajno odstupanje u sredinama?
+### Postoji li neki uzorak koji značajno odstupa od ostalih?
+
+- Odgovore na ova pitanja ćemo pokušati pronaći koristeći ANOVA-u. 
+- ANOVA se temelji na usporedbi varijance (raspršenosti) između grupa s varijancom unutar grupa. Osnovna premisa ANOVE je da ako        postoji značajna razlika između grupa, varijanca između grupa će biti veća od varijance unutar grupa.
+ 
+- Zavisna varijabla su poeni po desetljeću (kontinuirana varijabla), dok je nezavisna kategorijska varijabla s više od dvije razine     varijabla desetljeća.
+
+### Tri osnovne pretpostavke ANOVA-e su:
+    - 1. normalnost svake grupe podataka 
+         (provjera koristeći Q-Q plot i/ili Shapiro-Wilk test normalnosti)
+    - 2. distribucije imaju identične vraijance 
+         (kreiranje boxplota i/ili Bartlett Test jednakih varijanci)
+    - 3. podaci su nezavisni unutar uzorka podataka
+         (nema provjere)
+
+```{r}
+filtered_data <- points_by_decade_player %>%
+  filter(TotalGames >= 50, TotalPoints >= 500)
+shapiro_results <- filtered_data %>%
+  group_by(Decade) %>%
+  summarize(shapiro_p_value = shapiro.test(TotalPoints)$p.value)
+
+print(shapiro_results)
+
+qqPlot <- function(data, group) {
+  uniqueGroups <- unique(data[[group]])
+  par(mfrow=c(2,2)) 
+  for (grp in uniqueGroups) {
+    dataSubset <- data[data[[group]] == grp, ]
+    qqnorm(dataSubset$TotalPoints, main = paste("Q-Q plot za", grp))
+    qqline(dataSubset$TotalPoints)
+  }
+}
+qqPlot(filtered_data, "Decade")
+```
+
+Zaključujemo kako ANOVA test nije prikladan kako podaci nisu noramlno distribuirani, čak i za slučaj da se otklone stršeće vrijednsoti. U ovome smo slučaju postavili da su svi igrači s manje od 50 utakmica ili 500 poena stršeće vrijednosti, kako je to iznimno malena broja u desetljeću u kojemu je 820 ukupno odiranih utakmica regularne sezone.
+
+Iz tih razloga odlučujemo se primjeniti neparametarski test  Kruskal-Wallis (neparametarska ANOVA).
+Uvjet za primjenjivost Kruskal-Wallisovog testa: veličina svakog uzorka je barem 5.
+
+- H0 : medijani distribucija svih uzoraka su jednaki 
+- H1 :barem dva medijana nisu jednaka
+
+Nivo značajnosti alfa postavljamo na 0.05.
+
+
+```{r}
+kruskal_test_result <- kruskal.test(TotalPoints ~ Decade, data = filtered_data)
+
+# printaj  rezultat  testa  Kruskal-Wallis
+print(kruskal_test_result)
+```
+Rezultati Kruskal-Wallis testa pokazuju vrlo nisku p-vrijednost (manju od 2.2e-16), što ukazuje na to da postoji statistički značajna razlika u ukupnim poenima po igraču između različitih desetljeća.
+
+
+ZAKLJUČAK:
+
+Zaključak je da igrači iz različitih desetljeća imaju statistički značajno različite medijane ukupnih bodova. To može ukazivati na trendove u načinu igranja, pravilima igre, stilovima treninga, ili drugim faktorima koji su se mijenjali tijekom vremena.
+
+
+### Vizualizacija prosjeka poena
+Na sljedećem grafu vidimo prosječan broj poena po svakom desetljeću. Crvena isprekidana linija označava prosječan broj poena po svim utakmicama na cijelom skupu podataka.
+
+
+  
+```{r}
+ggplot(decade_summary, aes(x = Decade, y = AveragePointsPerGame, fill = Decade)) +
+  geom_bar(stat = "identity") +
+  geom_hline(yintercept = overall_average_points_per_game, linetype = "dashed",
+  color = "red") +
+  theme_minimal() +
+  labs(title = "Avg br poena igrača po utakmici po desetljeću",
+       x = "Desetljeće",
+       y = "Prosječan broj poena po utakmici") +
+  annotate("text", x = "1990s", y = overall_average_points_per_game, 
+           label = paste("Ukupni prosjek:",
+            round(overall_average_points_per_game, 2)), vjust = -1)
+
+```
+
+ODGOVOR NA PITANJE 2: 
+
+###  Postoji li značajna statistička razlika u visini igrača koji igraju za ekipe zapadne od igrača koji igraju za ekipe istočne konferencije
+
+```{r}
+# istočna i zapadna konferekncija imaju 15 timova, ovdje svakom igraču                                                                # na temelju tima određujem konferenciju (moguće promjene timova pokrivene)
+nba_data <- nba_data %>%
+  mutate(conference = case_when(
+    team_abbreviation %in% c("BOS", "BKN", "NYK", "PHI", "TOR",
+                             "CHI", "CLE", "DET","IND", "MIL", 
+                             "ATL", "CHA", "MIA", "ORL", "WAS", 
+                             "CHH","NJN") ~ "East",
+    team_abbreviation %in% c("DEN", "MIN", "OKC", "POR", "UTA",
+                             "GSW", "LAC", "LAL", "PHX", "SAC",
+                             "DAL", "HOU", "MEM", "NOP", "SAS", 
+                             "VAN","SEA","NOH","NOK") ~ "West",
+    TRUE ~ NA_character_
+  ))
+
+
+```
+  
+### Analiza 
+
+a) Testiranje normalnosti Q-Q plotovima
+```{r}
+# Q-Q plot istočne konferencije
+qqnorm(nba_data$player_height[nba_data$conference == "East"],
+       main = "Q-Q Plot for Eastern Conference")
+qqline(nba_data$player_height[nba_data$conference == "East"])
+
+# Q-Q plot zapadne konferencije
+qqnorm(nba_data$player_height[nba_data$conference == "West"], 
+       main = "Q-Q Plot for Western Conference")
+qqline(nba_data$player_height[nba_data$conference == "West"])
+
+```
+KOMENTAR : 
+Zaključujemo kako Q-Q grafovi obje konferencije prikazuju malenu devijaciju od teoretske linije na donjim i gornjim krajevima, što indicira odstupanje od normalne distribucije.
+Repovi su teži od normalne distribucije, što znači ili da su podaci dejlomično  nakošeni ili da imaju outliera. Trenutan zaključak je kako je ovakva distibucija normalna, odnosno možemo zaključiti kako "dovoljno dobro" odgovara teoretskoj normalnoj distribuciji te ćemo zaključiti kako je ostvarena pretpostavka normalnosti.
+
+
+b) Crtanje box plota i histograma podataka
+
+```{r}
+# Box plot
+boxplot(player_height ~ conference, data = nba_data, 
+        main = "Visina igrača po Konferencijama",
+        xlab = "Konferencija", ylab = "Visina igrača")
+
+# Histogram
+hist(nba_data$player_height[nba_data$conference == "East"], 
+     main = "Histogram visina- Istok", xlab = "Height", col = "blue" )
+hist(nba_data$player_height[nba_data$conference == "West"], 
+     main = "Histogram visina- Zapad", xlab = "Height", col = "red")
+
+```
+Na nacrtanim dijagramima vidimo kako postoje stršeće vrijednosti, ali ne u značajnom broju. Medijanu visina obaju konferencija su slični, dok na zapadu je IQR nešto veći u odnosu na istočnu konferenciju.
+
+c) t-test za nezavisne uzorke -> parametarski test
+T-test je robustan na manja odstupanja od normalnosti.
+Snažniji je od neparametarskih testova ako njegove pretpostavke nisu povrijeđene. Međutim, prisustvo outliera može utjecati na T-test, čineći ga manje pouzdanim ako su te izvanredne vrijednosti ekstremne. Outliere smo vidjeli na box plotu u b) dijelu, ali Q-Q plotom smo vidjeli minimalno odstupanje od normalne distribucije, tako da smo zaključili kako možemo reći da su podaci normalno distribuirani te ćemo koristiti paramaterski test, odnosno t-test.
+
+```{r}
+# izvođenje t-testa da  vidimo postoji li 
+# značajna razlika u visinama igrača različitih konferencija
+t_test_result <- t.test(player_height ~ conference, data = nba_data)
+
+print(t_test_result)
+
+```
+
+ZAKLJUČAK 
+
+Iz grafova smo zaključili kako su podaci normalno distibuirani.
+Tako, odabiremo t test (parametarski) kako mislimo kako govorimo o dovoljno velikom broju podataka.
+
+
+----------------------------------------------------------------------------------------------------
+
+
+H0: nema razlike u srednjim visinama igrača Istočne i Zapadne konferencije na osnovu dostupnih podataka
+
+
+H1: postoji razlika u srednjim visinama igrača Istočne i Zapadne konferencije na osnovu dostupnih podataka
+alfa = 0.05
+
+
+
+Uzimajući da je alfa = 0.05, a kako p iznosi 0.4341, zaključak je da  nema statistički značajne razlike u srednjim vrijednostima visina igrača između dvije konferencije. 
+Drugim riječima, ne možemo odbaciti nultu hipotezu koja kaže da nema razlike u srednjim visinama igrača Istočne i Zapadne konferencije na osnovu dostupnih podataka.
+
+
+### Kakva je veza izmedu dobi igrača i prosječnog broja postignutih poena po sezoni?
+
+Gledati ćemo prosječan broj postignutih poena po utakmici kao i prosječan broj odigranih utakmica igrača po godini, grupiranih po godinama.
+
+Za najboljih 100 strijelaca svake godine izvaditi ćemo statistiku o prosječnoj dobi i broju sezona koje su u prosjeku provedene u NBA-u. Smatramo kako je navedena statistika zanimljiva kako u sezoni prosječno igra oko 500 igrača (30 timova po 18 igrača) pa je ovo značajan udio promatranih igrača koji ipak imaju veći broj psotignutih poena po utakmici te lakše dolazimo do uvida o tome o kojoj se dobi radi kada govorimo o najboljim strijelcima lige. Mogli  bismo govoriti o proširenju na 200tinjak igrača, ali kako je broj arbitraran, smatramo da "najboljim" strijelcima možemo proglasiti igrače koji ulaze u ovu statistiku, odnosno sve igrače u top 100 strijelaca sezone ( tako uključujemo 2.,3. i 4. napadačku opciju svakog tima).
+
+Nije svaki igrač bio draftom izabran u ligu, tako da smo grupirali podatkovni okvir i izvukli informacije o prvoj godini igranja u ligi za svakog igrača.
+
+
+```{r}
+nba_data <- nba_data %>%
+  mutate(season_start_year = as.integer(sub("-.*", "", season))) 
+
+# podatkovni okvir s prvog godinom igranja svakog igrača
+players_first_year <- nba_data %>%
+  group_by(player_name) %>%
+  summarise(first_year = min(season_start_year))
+#head(players_first_year)
+
+nba_data <- nba_data %>%
+  left_join(players_first_year, by = "player_name")
+
+top_scorers_average_age_exp <- nba_data %>%
+  mutate(total_points = pts * gp, 
+         years_in_league = season_start_year - first_year + 1 # izračun broja godina u ligi
+         ) %>%
+  group_by(season) %>%
+  top_n(100, total_points) %>%
+  summarise(average_age = mean(age, na.rm = TRUE),
+            average_experience = mean(years_in_league, na.rm = TRUE)) 
+# srednja vrijednsost broja godina /iskustvo u ligi
+
+print(top_scorers_average_age_exp)
+```
+
+### Ovdje je podatkovni okvir bez iskustva, za prvih nekoliko godina nema smisla jer se nisu skupljali raniji podaci
+
+```{r}
+top_scorers_average_age <- nba_data %>%
+  mutate(total_points = pts * gp) %>%  # izračun ukupnih poena u sezoni
+  group_by(season) %>%
+  top_n(100, total_points) %>%
+  summarise(average_age = mean(age, na.rm = TRUE))
+
+print(top_scorers_average_age)
+```
+
+Vizualizacija po godinama prosječne dobi najboljih 100 strijelaca
+
+```{r}
+# račuanj vrijednosti broja godina najboljih 100 strijelaca lige
+top_scorers_average_age <- top_scorers_average_age %>%
+  mutate(season_start_year = as.numeric(sub("-.*", "", season)))  
+
+ggplot(top_scorers_average_age, aes(x = season_start_year, y = average_age)) +
+  geom_point() +  #
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  theme_minimal() + 
+  labs(x = "Sezona", y = "Prosječna dob", 
+       title = "Prosječna dob top 100 strijelaca po sezoni u NBA-u") +
+  scale_x_continuous(breaks = top_scorers_average_age$season_start_year,
+                     labels = top_scorers_average_age$season) +  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+Iz grafa se jasno vidi kako dob najboljih strijelaca lige generalno opada po sezonama, odnosno moguće je zaključiti kako postoji trend u podacima za najbolkjih 100 strijelaca, a taj jest kako se prosječna dob najboljih 100 strijelaca kontinuirano smanjuje.
+Naravno, nije potpuno linearna ovisnost, ali jasno je moguće zaključiti kako se dob najboljih streijalca smanjila kroz godine.
+
+
+#### Nastavljamo promatrati sve igrače (ne samo 100 ponajboljih strijalca svake sezone)
+
+- Gledamo prosječan broj postignutih poena po starosti igrača.
+- Odrediti ćemo minimalnu i maksimalnu dob cijelog skupa podataka, za svaku godinu dodavati poene i utakmice, izračunati prosječan      broj poena igrača ovisno o njegovoj starosti.
+  
+  
+```{r}
+points_by_age <- nba_data %>%
+  group_by(age) %>%
+  summarize(TotalPoints = sum(gp * pts, na.rm = TRUE),
+            TotalGames = sum(gp, na.rm = TRUE), .groups = 'drop')
+print(points_by_age)
+```
+```{r}
+total_points_age <- points_by_age$TotalPoints
+total_games_age <- points_by_age$TotalGames
+
+average_points_per_game_age <- total_points_age / total_games_age
+
+age_summary <- data.frame(
+  Age = points_by_age$age,
+  TotalPoints = total_points_age,
+  TotalGames = total_games_age,
+  AveragePointsPerGame = average_points_per_game_age
+)
+
+print(age_summary)
+
+```
+  
+Sada ćemo vizualizirati ovisnost o starosti igrača i prosjeku poena po utakmici. 
+Na x osi nalaze se podaci o godinama igrača, a na y osi nalaze se prosjeci poena po utakmici po godinama.
+
+```{r}
+
+ggplot(age_summary, aes(x = Age, y = AveragePointsPerGame)) +
+  geom_point() +
+  geom_line() +
+  geom_smooth(method = "loess", se = FALSE) + 
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), 
+  color = "red", se = FALSE) +
+  theme_minimal() +
+  labs(x = "Dob", y = "Poeni po utakmici",
+       title = "Prosjek poena po utakmici ovisno o dobi igrača") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+Model plave boje na vizualizaciji i koji opisuje prosjek poena po utakmici ovisno o dobi igrača je loess, što je kratica za lokalnu regresiju.
+
+Lokalna je regresija ne parametarski pristup koji prilagođava više regresora u lokalnom okruženju, što je utoliko korisnije kako znamo minimalnu i maksimalnu dob igrača u našem skupu podataka. 
+
+Krivulja crvene boje je vizualizacija prilagodbe polinomnog modela drugog stupnja.
+
+ZAKLJUČAK: 
+
+
+- a) postoji ne linearna veza između dobi igrača i performansi na terenu u kontekstu postignutih poena na utakmici. Performanse ne opadaju niti rastu linearno, već prate zakrivljenu trajektoriju.
+- b) vrhunac karijere: u sportskom žargonu, najbolje godine igrača kada isti nastupa ponajbolje u svojoj karijeri i u odnosu na ostatak lige. Zaključak je kako postoji trenutak kada rast poena, prisutan od rookie (prve) sezone, krene stagnirati; upravo ta stagnacija gdje igrači postižu najviše poena tokom godina predstavlja vrhunac karijere
+- c) Loess vs polinomna prilagodba: loess krivulja blisko prati stvarne podatke, pružajući fleksibilnu prilagodbu lokalnim varijacijama podataka. S druge strane, polinomna krivulja isto dobro objašnjava globalni trend, ali je glađa i ne prilagođava se lokalnim fluktuacijama kao loess krivulja, ali obje krivulje objašnjavaju sličan trend u podacima.
+- d) Igrači su u najboljim godine, ukoliko je gruba granica 10 poena po utakmici (predefinirana s naše strane), od svoje 25. do svoje 30. godine života
+- e) Postepeni rast poena do dobi od 25. te postepeni pad nakon 30. godine mogu biti objašnjeni, osim neiskustvom za ranije godine te padom fizičke spreme nakon 30. godine i ulogom u timu, ali kako nemamo podatke o tome, ne možemo zaključiti ništa po tom pitanju.
+
+### Možemo li predvidjeti prosječni broj poena igrača u sezoni s obzirom na njegove biometrijske podatke
+
+
+#### BONUS: Prije samog modeliranja ovisnosti poena o biometrijskim podacima, provjeravamo zavisnost ostalih važnih komponenata, odnosno skokova i asistencija, o biometrijskim podacima
+
+Pretpostavke:
+
+
+  - niži igraći imaju više asistencija  i ukradenih lopti te manje skokova
+  - viši igrači manje asistencija te više skokova i blokada
+  - težina, visina i dob  dobro opisuju igračev prosjek poena.
+
+```{r}
+težine_visine <- nba_data %>%
+  group_by(player_name) %>%
+  summarise(player_height = mean(player_height, na.rm = TRUE),
+            player_weight = mean(player_weight, na.rm = TRUE))
+
+```
+
+
+Vizualizacija težina i visina igrača
+
+```{r}
+p1 <- ggplot(težine_visine, aes(x = player_height)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  geom_vline(aes(xintercept = mean(player_height, na.rm = TRUE)),
+             color = '#c9082a', linetype = "dashed") +
+  labs(y = "Broj igrača", x = "Visina (cm)") +
+  theme_minimal()
+
+p2 <- ggplot(težine_visine, aes(x = player_weight)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  geom_vline(aes(xintercept = mean(player_weight, na.rm = TRUE)), 
+             color = '#c9082a', linetype = "dashed") +
+  labs(y = "Broj igrača", x = "Težina (kg)") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+#### Vizualizacija korelacijske matrice između značanjih varijabli
+
+```{r, fig.width=8, fig.height=8, fig.align='center'}
+df_corr <- nba_data %>%
+  filter(season != '2019-01-01') %>%
+  select(gp, pts, reb, ast, net_rating, usg_pct, player_weight, player_height)
+
+corr <- cor(df_corr, use = "complete.obs")
+
+corrplot(corr, method = "square", type = "upper",  
+         tl.col = "black", tl.srt = 45, diag = FALSE,
+         col = colorRampPalette(c("red", "white", "blue"))(200))
+```
+
+#### Vizualizacija ovisnosti broja skokova i asistencija ovisno o igračevoj težini, odnosno visini. 
+  
+```{r}
+df_melted <- reshape2::melt(df_corr, id.vars = c("player_height", "player_weight"))
+
+df_filtered <- df_melted %>%
+  filter(variable %in% c("reb", "ast"))
+
+ggplot(df_filtered, aes(x = player_height, y = value)) +
+  geom_point(color = '#17408b', alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = '#c9082a') +
+  facet_grid(variable ~ ., scales = "free") +
+  theme_minimal() +
+  labs(x = "Težina", y = "Statistike") +
+  theme(strip.text.x = element_text(size = 12)) +
+  ggtitle("Odnos visine i skokova te asistencija")
+
+ggplot(df_filtered, aes(x = player_weight, y = value)) +
+  geom_point(color = '#17408b', alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = '#c9082a') +
+  facet_grid(variable ~ ., scales = "free") +
+  theme_minimal() +
+  labs(x = "Težina", y = "Statistike") +
+  theme(strip.text.x = element_text(size = 12)) +
+  ggtitle("Odnos težine i skokova te asistencija")
+
+```
+
+ZAKLJUČAK :  dvije naše pretpostavke su na temelju grafova opravdane; teži/viši igrači imaju veći prosjek skokova po utakmici te manji broj asistencija po utakmici u odnosu na niže igraće, koji imaju više asistencija i manje skokova u odnosu na više igrače.
+
+Sada ćemo promatrati broj poena po utakmici ovisno o visini i težini igrača.
+
+Pomoću modela linerane regresije probati ćemo opisati ovisnost poena igrača o težini i visini igrača, kao i o dobi igrača.
+
+```{r}
+# Treniranje modela na cijelom datasetu
+model <- lm(pts ~ player_height + player_weight + age, data = nba_data)
+
+# Prikaz sažetka modela
+summary(model)
+
+# Predviđanja modela na istom datasetu
+predictions <- predict(model, newdata = nba_data)
+
+# Izračunavanje Mean Squared Error (MSE)
+MSE <- mean((predictions - nba_data$pts)^2)
+print(paste("MSE:", MSE))
+
+# Izračunavanje R kvadrat (R²) - koeficijent determinacije
+SST <- sum((nba_data$pts - mean(nba_data$pts))^2)
+SSR <- sum((predictions - nba_data$pts)^2)
+R_squared <- 1 - (SSR/SST)
+print(paste("R²:", R_squared))
+
+
+```
+ZAKLJUČAK:
+
+Model linearne regresije analizirao je utjecaj visine (player_height), težine (player_weight) i dobi (age) igrača na broj poena po utakmici (pts). Prema modelu, odsječak na y-osi iznosi 18.9972, što sugerira da bi teoretski igrač s visinom 0 i težinom 0 u prosjeku postigao oko 18.997214 poena po utakmici. Ova statistika nije praktično relevantna jer ne postoji igrač s takvim karakteristikama.
+
+Koeficijenti za visinu i težinu su statistički značajni (p-vrijednosti < 0.05), što znači da oni imaju statistički značajan utjecaj na broj postignutih poena po utakmici. Koeficijent za dob nije statistički značajan (p-vrijednost > 0.05), što ukazuje da dob, unutar ovog modela, nema značajan utjecaj na broj postignutih poena.
+
+Koeficijent R² iznosi 0.004387, što znači da model objašnjava samo oko 0.44% varijabilnosti u broju postignutih poena. Ovo je vrlo nizak postotak, što ukazuje na to da model ne objašnjava dobro varijabilnost ciljane varijable, odnosno da možda postoje drugi faktori koji bolje objašnjavaju broj postignutih poena.
+
+Rezidualna standardna pogreška je oko 6, što sugerira da su predviđanja modela u prosjeku udaljena za 6 poena od stvarnih vrijednosti.
+
+Ukupno gledano, iako su visina i težina statistički značajni prediktori, model ukazuje na to da oni sami po sebi ne pružaju snažno objašnjenje za varijabilnost u broju postignutih poena po utakmici. Drugi faktori, koji nisu uključeni u model, mogli bi dati bolje objašnjenje i trebali bi biti razmotreni u dubljim analizama.
+
+
+
+
+
+
+
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+
